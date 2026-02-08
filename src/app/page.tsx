@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   PRODUCTS,
   CATEGORIES,
@@ -9,24 +9,20 @@ import {
   formatRupiah,
   type Product,
 } from "@/lib/products";
+import {
+  createOrder,
+  getOrdersByUsername,
+  uploadPaymentProof,
+  type Order,
+  type OrderItem,
+  type OrderStatus,
+} from "@/lib/firestore";
 
 type Tab = "home" | "shop" | "orders" | "info";
-type OrderStatus = "pending" | "processing" | "done" | "cancelled";
 
 interface CartItem {
   product: Product;
   qty: number;
-}
-
-interface Order {
-  id: string;
-  items: CartItem[];
-  total: number;
-  status: OrderStatus;
-  date: string;
-  username: string;
-  payment: string;
-  note: string;
 }
 
 // ─── HEADER ───
@@ -92,7 +88,6 @@ function HomeSection({
 
   return (
     <div>
-      {/* Stats */}
       <div className="stats-grid">
         <div className="stat-card">
           <span className="stat-number">1K+</span>
@@ -108,7 +103,6 @@ function HomeSection({
         </div>
       </div>
 
-      {/* Quick Actions */}
       <div className="quick-actions">
         <div className="action-card" onClick={onShop}>
           <span className="action-icon">💎</span>
@@ -146,7 +140,6 @@ function HomeSection({
         </a>
       </div>
 
-      {/* Popular Products */}
       <div className="section-header">
         <span className="section-title">PRODUK POPULER</span>
         <button className="view-all-btn" onClick={onShop}>
@@ -177,7 +170,6 @@ function HomeSection({
         ))}
       </div>
 
-      {/* Categories */}
       <div className="section-header">
         <span className="section-title">KATEGORI</span>
       </div>
@@ -284,26 +276,15 @@ function ShopSection({
 }
 
 // ─── ORDERS SECTION ───
-function OrdersSection({ orders }: { orders: Order[] }) {
-  if (orders.length === 0) {
-    return (
-      <div>
-        <div className="tile">
-          <div className="tile-title">RIWAYAT ORDER</div>
-        </div>
-        <div
-          className="pixel-card"
-          style={{ textAlign: "center", padding: "40px 16px" }}
-        >
-          <div style={{ fontSize: "40px", marginBottom: "12px" }}>📋</div>
-          <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-            Belum ada order. Mulai belanja sekarang!
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+function OrdersSection({
+  orders,
+  loading,
+  onUploadProof,
+}: {
+  orders: Order[];
+  loading: boolean;
+  onUploadProof: (orderId: string, file: File) => void;
+}) {
   const statusClass: Record<OrderStatus, string> = {
     pending: "status-pending",
     processing: "status-processing",
@@ -317,24 +298,86 @@ function OrdersSection({ orders }: { orders: Order[] }) {
     cancelled: "Dibatalkan",
   };
 
+  if (loading) {
+    return (
+      <div>
+        <div className="tile"><div className="tile-title">RIWAYAT ORDER</div></div>
+        <div className="pixel-card" style={{ textAlign: "center", padding: "40px 16px" }}>
+          <div style={{ fontSize: "12px", color: "var(--muted)" }}>Memuat order...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (orders.length === 0) {
+    return (
+      <div>
+        <div className="tile"><div className="tile-title">RIWAYAT ORDER</div></div>
+        <div className="pixel-card" style={{ textAlign: "center", padding: "40px 16px" }}>
+          <div style={{ fontSize: "40px", marginBottom: "12px" }}>📋</div>
+          <div style={{ fontSize: "12px", color: "var(--muted)" }}>
+            Belum ada order. Mulai belanja sekarang!
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <div className="tile">
-        <div className="tile-title">RIWAYAT ORDER</div>
-      </div>
+      <div className="tile"><div className="tile-title">RIWAYAT ORDER</div></div>
       {orders.map((o) => (
         <div key={o.id} className="tx-item">
           <div className="tx-header">
-            <span className="tx-id">#{o.id}</span>
+            <span className="tx-id">#{o.id?.slice(0, 8).toUpperCase()}</span>
             <span className={`status-badge ${statusClass[o.status]}`}>
               {statusLabel[o.status]}
             </span>
           </div>
-          <div className="tx-date">{o.date}</div>
+          <div className="tx-date">
+            {o.createdAt?.toDate
+              ? o.createdAt.toDate().toLocaleString("id-ID")
+              : "-"}
+          </div>
           <div className="tx-products">
-            {o.items.map((i) => `${i.product.name} x${i.qty}`).join(", ")}
+            {o.items.map((i) => `${i.name} x${i.qty}`).join(", ")}
           </div>
           <div className="tx-total">{formatRupiah(o.total)}</div>
+
+          {/* Payment proof */}
+          {o.paymentProofUrl ? (
+            <div style={{ marginTop: "8px" }}>
+              <div className="hint" style={{ marginBottom: "4px" }}>Bukti Pembayaran:</div>
+              <img
+                src={o.paymentProofUrl}
+                alt="Bukti Pembayaran"
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "200px",
+                  borderRadius: "10px",
+                  border: "1px solid var(--border)",
+                }}
+              />
+            </div>
+          ) : o.status === "pending" ? (
+            <div style={{ marginTop: "8px" }}>
+              <label
+                className="pixel-btn"
+                style={{ fontSize: "8px", padding: "6px 10px", cursor: "pointer", display: "inline-block" }}
+              >
+                📷 Upload Bukti Bayar
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file && o.id) onUploadProof(o.id, file);
+                  }}
+                />
+              </label>
+            </div>
+          ) : null}
         </div>
       ))}
     </div>
@@ -345,11 +388,8 @@ function OrdersSection({ orders }: { orders: Order[] }) {
 function InfoSection() {
   return (
     <div>
-      <div className="tile">
-        <div className="tile-title">INFORMASI</div>
-      </div>
+      <div className="tile"><div className="tile-title">INFORMASI</div></div>
 
-      {/* About */}
       <div className="info-section">
         <div className="info-header">Tentang BIMM Market</div>
         <div className="info-content">
@@ -375,7 +415,6 @@ function InfoSection() {
         </div>
       </div>
 
-      {/* Schedule */}
       <div className="info-section">
         <div className="info-header">Jam Operasional</div>
         <div className="info-content">
@@ -390,7 +429,6 @@ function InfoSection() {
         </div>
       </div>
 
-      {/* How to Order */}
       <div className="info-section">
         <div className="info-header">Cara Order</div>
         <div className="info-content">
@@ -413,7 +451,6 @@ function InfoSection() {
         </div>
       </div>
 
-      {/* Payment Methods */}
       <div className="info-section">
         <div className="info-header">Metode Pembayaran</div>
         <div className="info-content">
@@ -428,7 +465,6 @@ function InfoSection() {
         </div>
       </div>
 
-      {/* FAQ */}
       <div className="info-section">
         <div className="info-header">FAQ</div>
         <div className="info-content">
@@ -441,33 +477,17 @@ function InfoSection() {
         </div>
       </div>
 
-      {/* Contact */}
       <div className="info-section">
         <div className="info-header">Kontak</div>
         <div className="info-content">
           <div className="contact-grid">
-            <a
-              className="contact-btn"
-              href="https://wa.me/6289540228397"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <a className="contact-btn" href="https://wa.me/6289540228397" target="_blank" rel="noopener noreferrer">
               💬 WhatsApp
             </a>
-            <a
-              className="contact-btn"
-              href="https://www.instagram.com/bimmmarket"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <a className="contact-btn" href="https://www.instagram.com/bimmmarket" target="_blank" rel="noopener noreferrer">
               📷 Instagram
             </a>
-            <a
-              className="contact-btn"
-              href="https://www.tiktok.com/@bimmmarket"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <a className="contact-btn" href="https://www.tiktok.com/@bimmmarket" target="_blank" rel="noopener noreferrer">
               🎵 TikTok
             </a>
             <a className="contact-btn" href="mailto:bimmmarket@gmail.com">
@@ -541,9 +561,7 @@ function CartModal({
                     className="icon-btn"
                     style={{ width: 28, height: 28, fontSize: 14 }}
                     onClick={() => onUpdateQty(item.product.id, item.qty - 1)}
-                  >
-                    -
-                  </button>
+                  >-</button>
                   <span style={{ fontSize: "12px", fontWeight: 600, minWidth: "16px", textAlign: "center" }}>
                     {item.qty}
                   </span>
@@ -551,16 +569,12 @@ function CartModal({
                     className="icon-btn"
                     style={{ width: 28, height: 28, fontSize: 14 }}
                     onClick={() => onUpdateQty(item.product.id, item.qty + 1)}
-                  >
-                    +
-                  </button>
+                  >+</button>
                   <button
                     className="icon-btn"
                     style={{ width: 28, height: 28, fontSize: 14, color: "var(--danger)" }}
                     onClick={() => onRemove(item.product.id)}
-                  >
-                    🗑
-                  </button>
+                  >🗑</button>
                 </div>
               </div>
             ))}
@@ -589,11 +603,13 @@ function CheckoutModal({
   cart,
   onClose,
   onSubmit,
+  submitting,
 }: {
   open: boolean;
   cart: CartItem[];
   onClose: () => void;
   onSubmit: (data: { username: string; payment: string; note: string }) => void;
+  submitting: boolean;
 }) {
   const [username, setUsername] = useState("");
   const [payment, setPayment] = useState("qris");
@@ -615,7 +631,6 @@ function CheckoutModal({
           </button>
         </div>
 
-        {/* Order Summary */}
         <div style={{ marginBottom: "12px" }}>
           <div className="hint" style={{ marginBottom: "6px" }}>Ringkasan Order:</div>
           {cart.map((item) => (
@@ -634,7 +649,6 @@ function CheckoutModal({
           </div>
         </div>
 
-        {/* Form */}
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           <div>
             <label className="hint" style={{ display: "block", marginBottom: "4px" }}>
@@ -681,15 +695,15 @@ function CheckoutModal({
           <button
             className="pixel-btn yellow"
             style={{ width: "100%", textAlign: "center", marginTop: "6px" }}
-            disabled={!username.trim()}
+            disabled={!username.trim() || submitting}
             onClick={() => {
-              if (!username.trim()) return;
+              if (!username.trim() || submitting) return;
               onSubmit({ username: username.trim(), payment, note: note.trim() });
               setUsername("");
               setNote("");
             }}
           >
-            KIRIM ORDER
+            {submitting ? "MENGIRIM..." : "KIRIM ORDER"}
           </button>
         </div>
       </div>
@@ -706,15 +720,77 @@ function Toast({ message, show }: { message: string; show: boolean }) {
   );
 }
 
+// ─── USERNAME PROMPT ───
+function UsernamePrompt({
+  onSave,
+}: {
+  onSave: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  return (
+    <div className="modal-backdrop open">
+      <div className="modal pixel-card" style={{ textAlign: "center" }}>
+        <div className="tile-title" style={{ marginBottom: "12px" }}>SELAMAT DATANG!</div>
+        <p className="small" style={{ marginBottom: "12px" }}>
+          Masukkan username Roblox kamu untuk melacak order:
+        </p>
+        <input
+          className="input"
+          placeholder="Username Roblox"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          style={{ width: "100%", marginBottom: "12px" }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && name.trim()) onSave(name.trim());
+          }}
+        />
+        <button
+          className="pixel-btn yellow"
+          style={{ width: "100%" }}
+          disabled={!name.trim()}
+          onClick={() => name.trim() && onSave(name.trim())}
+        >
+          LANJUTKAN
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN APP ───
 export default function Home() {
   const [tab, setTab] = useState<Tab>("home");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState({ message: "", show: false });
+  const [savedUsername, setSavedUsername] = useState<string | null>(null);
+  const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // Load saved username from localStorage
+  useEffect(() => {
+    const stored = localStorage.getItem("bimm_username");
+    if (stored) {
+      setSavedUsername(stored);
+    } else {
+      setShowUsernamePrompt(true);
+    }
+  }, []);
+
+  // Load orders when username available or tab changes to orders
+  useEffect(() => {
+    if (savedUsername && tab === "orders") {
+      setOrdersLoading(true);
+      getOrdersByUsername(savedUsername)
+        .then(setOrders)
+        .catch(() => {})
+        .finally(() => setOrdersLoading(false));
+    }
+  }, [savedUsername, tab]);
 
   const showToast = useCallback((msg: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -754,31 +830,75 @@ export default function Home() {
     setCart((prev) => prev.filter((i) => i.product.id !== id));
   }, []);
 
+  const handleSaveUsername = useCallback((name: string) => {
+    localStorage.setItem("bimm_username", name);
+    setSavedUsername(name);
+    setShowUsernamePrompt(false);
+  }, []);
+
   const handleCheckout = useCallback(
-    (data: { username: string; payment: string; note: string }) => {
-      const total = cart.reduce((s, i) => s + i.product.price * i.qty, 0);
-      const order: Order = {
-        id: Date.now().toString(36).toUpperCase(),
-        items: [...cart],
-        total,
-        status: "pending",
-        date: new Date().toLocaleString("id-ID"),
-        username: data.username,
-        payment: data.payment,
-        note: data.note,
-      };
-      setOrders((prev) => [order, ...prev]);
-      setCart([]);
-      setCheckoutOpen(false);
-      setCartOpen(false);
-      showToast("Order berhasil! Silakan hubungi admin untuk konfirmasi.");
-      setTab("orders");
+    async (data: { username: string; payment: string; note: string }) => {
+      setSubmitting(true);
+      try {
+        const total = cart.reduce((s, i) => s + i.product.price * i.qty, 0);
+        const items: OrderItem[] = cart.map((i) => ({
+          productId: i.product.id,
+          name: i.product.name,
+          price: i.product.price,
+          qty: i.qty,
+          category: i.product.category,
+        }));
+
+        await createOrder({
+          items,
+          total,
+          username: data.username,
+          payment: data.payment,
+          note: data.note,
+        });
+
+        // Save username for future lookups
+        if (data.username !== savedUsername) {
+          localStorage.setItem("bimm_username", data.username);
+          setSavedUsername(data.username);
+        }
+
+        setCart([]);
+        setCheckoutOpen(false);
+        setCartOpen(false);
+        showToast("Order berhasil dikirim! Upload bukti pembayaran di tab Orders.");
+        setTab("orders");
+      } catch (err) {
+        showToast("Gagal mengirim order. Coba lagi.");
+      } finally {
+        setSubmitting(false);
+      }
     },
-    [cart, showToast]
+    [cart, showToast, savedUsername]
+  );
+
+  const handleUploadProof = useCallback(
+    async (orderId: string, file: File) => {
+      showToast("Mengupload bukti pembayaran...");
+      try {
+        await uploadPaymentProof(orderId, file);
+        // Refresh orders
+        if (savedUsername) {
+          const updated = await getOrdersByUsername(savedUsername);
+          setOrders(updated);
+        }
+        showToast("Bukti pembayaran berhasil diupload!");
+      } catch {
+        showToast("Gagal upload bukti. Coba lagi.");
+      }
+    },
+    [showToast, savedUsername]
   );
 
   return (
     <>
+      {showUsernamePrompt && <UsernamePrompt onSave={handleSaveUsername} />}
+
       <Header
         cartCount={cartCount}
         onCartClick={() => setCartOpen(true)}
@@ -792,7 +912,13 @@ export default function Home() {
           />
         )}
         {tab === "shop" && <ShopSection onAddToCart={addToCart} />}
-        {tab === "orders" && <OrdersSection orders={orders} />}
+        {tab === "orders" && (
+          <OrdersSection
+            orders={orders}
+            loading={ordersLoading}
+            onUploadProof={handleUploadProof}
+          />
+        )}
         {tab === "info" && <InfoSection />}
       </div>
 
@@ -815,6 +941,7 @@ export default function Home() {
         cart={cart}
         onClose={() => setCheckoutOpen(false)}
         onSubmit={handleCheckout}
+        submitting={submitting}
       />
 
       <Toast message={toast.message} show={toast.show} />
