@@ -769,7 +769,7 @@ export default function Home() {
   const [toast, setToast] = useState({ message: "", show: false });
   const [savedUsername, setSavedUsername] = useState<string | null>(null);
   const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
-  const toastTimer = useRef<ReturnType<typeof setTimeout>>();
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Load saved username from localStorage
   useEffect(() => {
